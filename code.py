@@ -1,10 +1,14 @@
+import time
+import usb_hid
+
 from pmk import PMK
 from pmk.platform.keybow2040 import Keybow2040 as Hardware
 
-import usb_hid
 from adafruit_hid.keyboard import Keyboard
 from adafruit_hid.keyboard_layout_us import KeyboardLayoutUS
 from adafruit_hid.keycode import Keycode
+
+DEBUG = True
 
 # Set up Keybow
 keybow = PMK(Hardware())
@@ -14,12 +18,16 @@ keys = keybow.keys
 keyboard = Keyboard(usb_hid.devices)
 layout = KeyboardLayoutUS(keyboard)
 
+# Either control (win) or cmd (mac)
+command_mod = "command"
+# command_mod = "control"
+
 # A map of keycodes that will be mapped sequentially to each of the keys, 0-15
 keymap = [
     ["f9"],
     ["delete"],
-    ["control", "y"],
-    ["control", "z"],  # 0x0-3
+    [command_mod, "y"],
+    [command_mod, "z"],  # 0x0-3
     ["left", "f11"],
     ["grave"],
     ["left"],
@@ -34,9 +42,14 @@ keymap = [
     ["space"],  # 0xC-F
 ]
 
+fire_time_interval = 0.1
+last_fired = {}
+
+# https://docs.circuitpython.org/projects/hid/en/latest/api.html#adafruit-hid-keycode-keycode
 keycodes = {
     "backspace": Keycode.BACKSPACE,
     "control": Keycode.LEFT_CONTROL,
+    "command": Keycode.COMMAND,
     "delete": Keycode.DELETE,
     "down": Keycode.DOWN_ARROW,
     "f11": Keycode.F11,
@@ -53,7 +66,6 @@ keycodes = {
     "y": Keycode.Y,
     "z": Keycode.Z,
 }
-
 
 colors = {
     "red": (255, 0, 0),
@@ -82,26 +94,59 @@ rgb_map = [
     "off",  # C-F
 ]
 
+def log(key, event):
+    if DEBUG == False:
+        return
+
+    now = time.monotonic()
+    mapping = keymap[key.number]
+    codes = [keycodes[c] for c in mapping]
+    print(f"{event} {key.number} {mapping} {codes} {now}")
+
+def send_keycode(key):
+    mapping = keymap[key.number]
+    codes = [keycodes[c] for c in mapping]
+    keyboard.send(*codes)
+    log(key, 'press')
+
 for key in keys:
     color = rgb_map[key.number]
     key.set_led(*colors[color])
 
     @keybow.on_press(key)
     def press_handler(key):
-        mapping = keymap[key.number]
-        codes = [keycodes[c] for c in mapping]
-        print(f"Press {mapping} {codes}")
-        keyboard.send(*codes)
+        send_keycode(key)
 
     @keybow.on_release(key)
     def release_handler(key):
         mapping = keymap[key.number]
-        print(f"Release {mapping}")
+        try:
+            del last_fired[key.number]
+        except KeyError:
+            pass
+
+        log(key, 'release')
 
     @keybow.on_hold(key)
     def hold_handler(key):
         mapping = keymap[key.number]
-        print(f"Hold {mapping}")
+        now = time.monotonic()
+        last_fired[key.number] = now
+        log(key, 'hold')
 
 while True:
     keybow.update()
+    if(not last_fired):
+        continue
+
+    now = time.monotonic()
+    for key in keys:
+        try:
+            last_fire = last_fired[key.number]
+        except KeyError:
+            continue
+        else:
+            next_fire = last_fire + fire_time_interval
+            if now > next_fire:
+                last_fired[key.number] = now
+                send_keycode(key)
